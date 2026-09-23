@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <meta name="description" content="Schedule WhatsApp group reminders in WIB through WAHA.">
+    <title>Waha Reminder</title>
+    <link rel="stylesheet" href="/styles.css">
+    <script type="module" src="/app.js"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">Skip to reminders</a>
+
+    <header class="topbar">
+      <div class="wordmark" aria-label="Waha Reminder home">
+        <span class="wordmark-primary">Waha</span>
+        <span class="wordmark-secondary">Reminder</span>
+      </div>
+
+      <div class="topbar-actions">
+        <div class="session-state" id="session-state" aria-live="polite">
+          <span class="status-mark" aria-hidden="true"></span>
+          <span id="session-label">Checking WhatsApp</span>
+        </div>
+        <button class="quiet-button" id="theme-toggle" type="button" aria-pressed="false">Dark theme</button>
+      </div>
+    </header>
+
+    <main class="workspace" id="main-content">
+      <section class="queue-panel" aria-labelledby="queue-title">
+        <div class="queue-heading">
+          <div>
+            <p class="context-line">WhatsApp group schedule</p>
+            <h1 id="queue-title">Upcoming reminders</h1>
+            <p class="heading-note">Times are shown in WIB (UTC+7).</p>
+          </div>
+
+          <div class="queue-tools">
+            <label for="status-filter">Show</label>
+            <select id="status-filter">
+              <option value="active">Active</option>
+              <option value="all">All reminders</option>
+              <option value="attention">Needs attention</option>
+              <option value="complete">Sent or cancelled</option>
+            </select>
+            <button class="quiet-button" id="refresh-reminders" type="button">Refresh list</button>
+          </div>
+        </div>
+
+        <div class="data-state" id="reminder-state" role="status">
+          <span class="loading-line" aria-hidden="true"></span>
+          <span>Loading reminders</span>
+        </div>
+        <ol class="reminder-list" id="reminder-list" aria-live="polite"></ol>
+      </section>
+
+      <aside class="composer" aria-labelledby="form-title">
+        <div class="composer-heading">
+          <div>
+            <p class="context-line">WIB schedule</p>
+            <h2 id="form-title">New reminder</h2>
+          </div>
+          <button class="text-button" id="cancel-edit" type="button" hidden>Stop editing</button>
+        </div>
+
+        <form id="reminder-form" novalidate>
+          <div class="field">
+            <div class="label-row">
+              <label for="group-id">WhatsApp group</label>
+              <button class="text-button" id="refresh-groups" type="button">Reload groups</button>
+            </div>
+            <select id="group-id" name="groupId" required disabled>
+              <option value="">Loading groups</option>
+            </select>
+            <p class="field-help" id="group-help">The connected number must already be a member.</p>
+          </div>
+
+          <fieldset class="field schedule-type">
+            <legend>Repeat</legend>
+            <div class="choice-row">
+              <label><input type="radio" name="scheduleType" value="one_time" checked> One time</label>
+              <label><input type="radio" name="scheduleType" value="daily"> Daily</label>
+              <label><input type="radio" name="scheduleType" value="weekday"> Weekdays</label>
+              <label><input type="radio" name="scheduleType" value="weekly"> Weekly</label>
+            </div>
+            <p class="field-help">Weekdays run Monday through Friday.</p>
+          </fieldset>
+
+          <div class="field">
+            <label for="scheduled-at">First send time</label>
+            <input id="scheduled-at" name="scheduledAt" type="datetime-local" step="60" required>
+            <p class="field-help">The selected time is interpreted as WIB.</p>
+          </div>
+
+          <div class="field">
+            <div class="label-row">
+              <label for="message">Message</label>
+              <output id="message-count" for="message">0 / 4096</output>
+            </div>
+            <textarea id="message" name="message" rows="6" maxlength="4096" required placeholder="Write the reminder exactly as the group should receive it."></textarea>
+          </div>
+
+          <div class="field compact-field">
+            <label for="max-retries">Retries after a failed send</label>
+            <select id="max-retries" name="maxRetries">
+              <option value="0">Do not retry</option>
+              <option value="1">1 retry</option>
+              <option value="2">2 retries</option>
+              <option value="3" selected>3 retries</option>
+              <option value="5">5 retries</option>
+            </select>
+          </div>
+
+          <div class="form-error" id="form-error" role="alert" hidden></div>
+
+          <button class="primary-button" id="submit-reminder" type="submit">Schedule reminder</button>
+        </form>
+      </aside>
+    </main>
+
+    <dialog class="delivery-dialog" id="delivery-dialog" aria-labelledby="delivery-title">
+      <div class="dialog-heading">
+        <div>
+          <p class="context-line">Send history</p>
+          <h2 id="delivery-title">Reminder deliveries</h2>
+        </div>
+        <button class="quiet-button" id="close-delivery" type="button">Close</button>
+      </div>
+      <div id="delivery-content" class="delivery-content"></div>
+    </dialog>
+
+    <div class="toast-region" id="toast-region" aria-live="polite" aria-atomic="true"></div>
+
+    <noscript>
+      <div class="noscript-message">JavaScript is required to manage reminders.</div>
+    </noscript>
+  </body>
+</html>

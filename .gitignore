@@ -1,0 +1,9 @@
+node_modules/
+.env
+coverage/
+artifacts/
+npm-debug.log*
+.DS_Store
+waha-sessions/
+waha-media/
+mysql-data/

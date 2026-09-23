@@ -1,0 +1,36 @@
+{
+  "name": "waha-reminder",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Schedule WhatsApp group reminders through WAHA.",
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch src/server.js",
+    "start": "node src/server.js",
+    "test": "vitest run",
+    "test:smoke": "node scripts/smoke-test.js",
+    "test:ui": "node scripts/ui-smoke-test.js",
+    "test:watch": "vitest",
+    "check": "npm run test"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "compression": "^1.8.2",
+    "dotenv": "^18.0.3",
+    "express": "^5.2.1",
+    "helmet": "^8.3.0",
+    "luxon": "^3.7.2",
+    "mysql2": "^3.24.4",
+    "node-cron": "^4.6.0",
+    "pino": "^10.3.1",
+    "pino-http": "^11.0.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.63.0",
+    "supertest": "^7.3.0",
+    "vitest": "^5.0.1"
+  }
+}
