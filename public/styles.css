@@ -526,6 +526,26 @@ fieldset {
   white-space: pre-wrap;
 }
 
+.reminder-messages {
+  display: grid;
+  gap: 7px;
+  margin: 10px 0 12px;
+  padding-left: 24px;
+}
+
+.reminder-messages li {
+  padding-left: 3px;
+  white-space: pre-wrap;
+}
+
+.message-fields {
+  border-top: 1px solid var(--line-soft);
+}
+
+.message-field textarea {
+  min-height: 110px;
+}
+
 .reminder-meta {
   flex-wrap: wrap;
   gap: 6px 14px;

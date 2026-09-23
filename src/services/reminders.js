@@ -2,27 +2,40 @@ import { randomUUID } from "node:crypto";
 import { DateTime } from "luxon";
 import { z } from "zod";
 import { config } from "../config.js";
-import { pool } from "../db/index.js";
+import { pool, withTransaction } from "../db/index.js";
 import { AppError } from "../lib/errors.js";
+import { parseStoredMessages } from "../lib/messages.js";
 import { formatLocalSql, localDateTimeToUtc, sqlNow, utcSqlToIso } from "../lib/time.js";
 import { sendText } from "./waha.js";
+
+const messageSchema = z.string().trim().min(1, "Write every message before scheduling.").max(4096);
 
 export const reminderInputSchema = z.object({
   groupId: z.string().min(1).max(128).refine((value) => value.endsWith("@g.us"), "Select a WhatsApp group."),
   groupName: z.string().min(1).max(255),
-  message: z.string().trim().min(1).max(4096),
+  message: messageSchema.optional(),
+  messages: z.array(messageSchema).min(1).max(10).optional(),
   scheduleType: z.enum(["one_time", "daily", "weekday", "weekly"]),
   scheduledAt: z.string().min(1),
   timezone: z.string().default(config.timezone),
   maxRetries: z.coerce.number().int().min(0).max(10).default(3)
-});
+}).superRefine((input, context) => {
+  if (!input.messages?.length && !input.message) {
+    context.addIssue({ code: "custom", path: ["messages"], message: "Add at least one message." });
+  }
+}).transform((input) => ({
+  ...input,
+  messages: input.messages?.length ? input.messages : [input.message]
+}));
 
 function serializeReminder(row) {
+  const messages = parseStoredMessages(row.messages, row.message);
   return {
     id: row.id,
     groupId: row.group_id,
     groupName: row.group_name,
-    message: row.message,
+    message: messages[0] || row.message,
+    messages,
     scheduleType: row.schedule_type,
     timezone: row.timezone,
     scheduledLocal: row.scheduled_local?.replace(" ", "T").replace(/\.000$/, ""),
@@ -43,6 +56,7 @@ function serializeDelivery(row) {
     id: row.id,
     reminderId: row.reminder_id,
     deliveryType: row.delivery_type,
+    messageIndex: row.message_index,
     scheduledFor: utcSqlToIso(row.scheduled_for),
     attemptedAt: utcSqlToIso(row.attempted_at),
     sentAt: utcSqlToIso(row.sent_at),
@@ -93,9 +107,9 @@ export async function createReminder(payload) {
 
   await pool.execute(
     `INSERT INTO reminders
-      (id, group_id, group_name, message, schedule_type, timezone, scheduled_local, next_run_at, next_attempt_at, max_retries)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [id, input.groupId, input.groupName, input.message, input.scheduleType, input.timezone, scheduledLocal, nextRunAt, nextRunAt, input.maxRetries]
+      (id, group_id, group_name, message, messages, schedule_type, timezone, scheduled_local, next_run_at, next_attempt_at, max_retries)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [id, input.groupId, input.groupName, input.messages[0], JSON.stringify(input.messages), input.scheduleType, input.timezone, scheduledLocal, nextRunAt, nextRunAt, input.maxRetries]
   );
 
   return serializeReminder(await getReminder(id));
@@ -109,14 +123,20 @@ export async function updateReminder(id, payload) {
   }
   const { scheduledLocal, nextRunAt } = scheduleValues(input);
 
-  await pool.execute(
-    `UPDATE reminders SET
-      group_id = ?, group_name = ?, message = ?, schedule_type = ?, timezone = ?, scheduled_local = ?,
-      next_run_at = ?, next_attempt_at = ?, status = 'scheduled', retry_count = 0, last_error = NULL,
-      lock_token = NULL, locked_at = NULL
-     WHERE id = ?`,
-    [input.groupId, input.groupName, input.message, input.scheduleType, input.timezone, scheduledLocal, nextRunAt, nextRunAt, id]
-  );
+  await withTransaction(async (connection) => {
+    await connection.execute(
+      "DELETE FROM reminder_deliveries WHERE reminder_id = ? AND delivery_type = 'scheduled' AND scheduled_for = ?",
+      [id, existing.next_run_at]
+    );
+    await connection.execute(
+      `UPDATE reminders SET
+        group_id = ?, group_name = ?, message = ?, messages = ?, schedule_type = ?, timezone = ?, scheduled_local = ?,
+        next_run_at = ?, next_attempt_at = ?, status = 'scheduled', retry_count = 0, last_error = NULL,
+        lock_token = NULL, locked_at = NULL
+       WHERE id = ?`,
+      [input.groupId, input.groupName, input.messages[0], JSON.stringify(input.messages), input.scheduleType, input.timezone, scheduledLocal, nextRunAt, nextRunAt, id]
+    );
+  });
 
   return serializeReminder(await getReminder(id));
 }
@@ -166,26 +186,35 @@ export async function listDeliveries(id) {
 
 export async function sendReminderNow(id) {
   const reminder = await getReminder(id);
-  const [countRows] = await pool.query("SELECT COUNT(*) AS count FROM reminder_deliveries WHERE reminder_id = ? AND delivery_type = 'manual'", [id]);
+  const messages = parseStoredMessages(reminder.messages, reminder.message);
+  const [countRows] = await pool.query(
+    "SELECT COALESCE(MAX(attempt_number), 0) AS count FROM reminder_deliveries WHERE reminder_id = ? AND delivery_type = 'manual'",
+    [id]
+  );
   const attemptNumber = Number(countRows[0].count) + 1;
+  const messageIds = [];
 
-  try {
-    const response = await sendText({ groupId: reminder.group_id, message: reminder.message });
-    const messageId = response?.id || response?.key?.id || response?.messageId || null;
-    await pool.execute(
-      `INSERT INTO reminder_deliveries
-        (reminder_id, delivery_type, scheduled_for, sent_at, attempt_number, status, waha_message_id, waha_response)
-       VALUES (?, 'manual', NULL, UTC_TIMESTAMP(3), ?, 'sent', ?, ?)`,
-      [id, attemptNumber, messageId, JSON.stringify(response ?? null)]
-    );
-    return { status: "sent", messageId };
-  } catch (error) {
-    await pool.execute(
-      `INSERT INTO reminder_deliveries
-        (reminder_id, delivery_type, scheduled_for, attempt_number, status, error_message)
-       VALUES (?, 'manual', NULL, ?, 'failed', ?)`,
-      [id, attemptNumber, error.message]
-    );
-    throw error;
+  for (const [messageIndex, message] of messages.entries()) {
+    try {
+      const response = await sendText({ groupId: reminder.group_id, message });
+      const messageId = response?.id || response?.key?.id || response?.messageId || null;
+      messageIds.push(messageId);
+      await pool.execute(
+        `INSERT INTO reminder_deliveries
+          (reminder_id, delivery_type, message_index, scheduled_for, sent_at, attempt_number, status, waha_message_id, waha_response)
+         VALUES (?, 'manual', ?, NULL, UTC_TIMESTAMP(3), ?, 'sent', ?, ?)`,
+        [id, messageIndex, attemptNumber, messageId, JSON.stringify(response ?? null)]
+      );
+    } catch (error) {
+      await pool.execute(
+        `INSERT INTO reminder_deliveries
+          (reminder_id, delivery_type, message_index, scheduled_for, attempt_number, status, error_message)
+         VALUES (?, 'manual', ?, NULL, ?, 'failed', ?)`,
+        [id, messageIndex, attemptNumber, error.message]
+      );
+      throw error;
+    }
   }
+
+  return { status: "sent", messageCount: messages.length, messageIds };
 }

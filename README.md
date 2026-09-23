@@ -6,6 +6,7 @@ A small JavaScript service for scheduling WhatsApp group reminders through WAHA.
 
 - Sends to WhatsApp groups that the connected number has already joined
 - Supports one-time, daily, weekdays (Monday to Friday), and weekly schedules
+- Sends 1 to 10 custom messages in order from one scheduled reminder
 - Stores reminder state and delivery history in MySQL
 - Retries failed scheduled sends and recovers work left in progress after a restart
 - Uses WAHA's `NOWEB` engine
@@ -26,6 +27,8 @@ Requirements: Docker Desktop with Docker Compose.
 4. Create or start the session named `default`, then scan its QR code with WhatsApp. Wait until the session is `WORKING`.
 5. Open the reminder console at <http://localhost:8080>. Sign in with `ADMIN_USERNAME` and `ADMIN_PASSWORD` from `.env`.
 6. Select a group, repeat rule, first send time, and message. All form times are WIB.
+
+Set **Messages per schedule** to create a sequence. For example, selecting 3 shows three separate message fields. WAHA sends message 1, 2, and 3 in order when the schedule runs. If a scheduled message fails, the retry continues from that message instead of repeating messages already recorded as sent.
 
 The browser may cache Basic Authentication credentials. Use a private window when testing a different administrator account.
 
@@ -74,4 +77,3 @@ The app and WAHA ports bind to `127.0.0.1` by default. If you put them behind a 
 - `public/`: browser interface
 - `tests/`: time and input validation tests
 - `scripts/`: API and browser smoke tests
-

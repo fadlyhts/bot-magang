@@ -15,8 +15,8 @@ const elements = {
   groupHelp: document.querySelector("#group-help"),
   refreshGroups: document.querySelector("#refresh-groups"),
   scheduledAt: document.querySelector("#scheduled-at"),
-  message: document.querySelector("#message"),
-  messageCount: document.querySelector("#message-count"),
+  sendCount: document.querySelector("#send-count"),
+  messageFields: document.querySelector("#message-fields"),
   maxRetries: document.querySelector("#max-retries"),
   formError: document.querySelector("#form-error"),
   submit: document.querySelector("#submit-reminder"),
@@ -29,7 +29,8 @@ const elements = {
 const state = {
   reminders: [],
   groups: [],
-  editingId: null
+  editingId: null,
+  messageDrafts: [""]
 };
 
 const statusLabels = {
@@ -192,19 +193,26 @@ function renderReminder(reminder) {
   status.textContent = statusLabels[reminder.status] || reminder.status;
   titleRow.append(title, status);
 
-  const message = document.createElement("p");
-  message.className = "reminder-message";
-  message.textContent = reminder.message;
+  const messages = reminder.messages?.length ? reminder.messages : [reminder.message];
+  const messageList = document.createElement(messages.length > 1 ? "ol" : "div");
+  messageList.className = messages.length > 1 ? "reminder-messages" : "reminder-message";
+  for (const messageText of messages) {
+    const message = document.createElement(messages.length > 1 ? "li" : "p");
+    message.textContent = messageText;
+    messageList.append(message);
+  }
 
   const meta = document.createElement("div");
   meta.className = "reminder-meta";
   const repeat = document.createElement("span");
   repeat.textContent = repeatLabels[reminder.scheduleType] || reminder.scheduleType;
+  const messageTotal = document.createElement("span");
+  messageTotal.textContent = `${messages.length} message${messages.length === 1 ? "" : "s"}`;
   const attempts = document.createElement("span");
   attempts.textContent = reminder.retryCount ? `${reminder.retryCount} failed attempt${reminder.retryCount === 1 ? "" : "s"}` : "No failed attempts";
-  meta.append(repeat, attempts);
+  meta.append(repeat, messageTotal, attempts);
 
-  body.append(titleRow, message, meta);
+  body.append(titleRow, messageList, meta);
 
   if (reminder.lastError) {
     const error = document.createElement("p");
@@ -333,12 +341,46 @@ function formPayload() {
   return {
     groupId: elements.groupSelect.value,
     groupName: selected?.dataset.groupName || selected?.textContent || "",
-    message: elements.message.value,
+    messages: [...elements.messageFields.querySelectorAll("textarea")].map((field) => field.value),
     scheduleType: new FormData(elements.form).get("scheduleType"),
     scheduledAt: elements.scheduledAt.value,
     timezone: WIB_TIMEZONE,
     maxRetries: Number(elements.maxRetries.value)
   };
+}
+
+function renderMessageFields() {
+  const count = Number(elements.sendCount.value);
+  while (state.messageDrafts.length < count) state.messageDrafts.push("");
+
+  const fields = [];
+  for (let index = 0; index < count; index += 1) {
+    const field = document.createElement("div");
+    field.className = "field message-field";
+
+    const labelRow = document.createElement("div");
+    labelRow.className = "label-row";
+    const label = document.createElement("label");
+    label.htmlFor = `message-${index + 1}`;
+    label.textContent = count === 1 ? "Message" : `Message ${index + 1}`;
+    const counter = document.createElement("output");
+    counter.htmlFor = label.htmlFor;
+    counter.textContent = `${state.messageDrafts[index].length} / 4096`;
+    labelRow.append(label, counter);
+
+    const textarea = document.createElement("textarea");
+    textarea.id = label.htmlFor;
+    textarea.name = "messages";
+    textarea.rows = 4;
+    textarea.maxLength = 4096;
+    textarea.required = true;
+    textarea.placeholder = `Write message ${index + 1} exactly as the group should receive it.`;
+    textarea.value = state.messageDrafts[index];
+    textarea.dataset.messageIndex = String(index);
+    field.append(labelRow, textarea);
+    fields.push(field);
+  }
+  elements.messageFields.replaceChildren(...fields);
 }
 
 function showFormError(message) {
@@ -349,12 +391,14 @@ function showFormError(message) {
 function resetForm() {
   state.editingId = null;
   elements.form.reset();
+  state.messageDrafts = [""];
+  elements.sendCount.value = "1";
+  renderMessageFields();
   elements.scheduledAt.value = wibInputValue();
   elements.maxRetries.value = "3";
   elements.formTitle.textContent = "New reminder";
   elements.submit.textContent = "Schedule reminder";
   elements.cancelEdit.hidden = true;
-  elements.messageCount.value = "0 / 4096";
   showFormError("");
 }
 
@@ -368,8 +412,9 @@ function editReminder(id) {
     renderGroupOptions();
   }
   elements.groupSelect.value = reminder.groupId;
-  elements.message.value = reminder.message;
-  elements.messageCount.value = `${reminder.message.length} / 4096`;
+  state.messageDrafts = reminder.messages?.length ? [...reminder.messages] : [reminder.message];
+  elements.sendCount.value = String(state.messageDrafts.length);
+  renderMessageFields();
   elements.scheduledAt.value = reminder.scheduledLocal.slice(0, 16);
   elements.maxRetries.value = String(reminder.maxRetries);
   const radio = elements.form.querySelector(`[name="scheduleType"][value="${reminder.scheduleType}"]`);
@@ -433,7 +478,7 @@ async function reminderAction(event) {
   }
 
   const endpoints = {
-    send: { path: "send-now", copy: "Message sent to the group." },
+    send: { path: "send-now" },
     pause: { path: "pause", copy: "Reminder paused." },
     resume: { path: "resume", copy: "Reminder resumed." },
     cancel: { path: "", copy: "Reminder cancelled.", method: "DELETE" }
@@ -444,8 +489,12 @@ async function reminderAction(event) {
   control.disabled = true;
   try {
     const suffix = operation.path ? `/${operation.path}` : "";
-    await api(`/api/reminders/${id}${suffix}`, { method: operation.method || "POST" });
-    toast(operation.copy);
+    const result = await api(`/api/reminders/${id}${suffix}`, { method: operation.method || "POST" });
+    const sentCount = result.messageCount || 1;
+    const copy = action === "send"
+      ? `${sentCount} message${sentCount === 1 ? "" : "s"} sent to the group.`
+      : operation.copy;
+    toast(copy);
     await loadReminders();
   } catch (error) {
     toast(error.message, "error");
@@ -474,7 +523,8 @@ async function showHistory(id) {
       row.className = "delivery-row";
       const content = document.createElement("div");
       const title = document.createElement("strong");
-      title.textContent = delivery.status === "sent" ? "Sent" : "Failed";
+      const messageNumber = delivery.messageIndex === null ? null : Number(delivery.messageIndex) + 1;
+      title.textContent = `${delivery.status === "sent" ? "Sent" : "Failed"}${messageNumber ? ` message ${messageNumber}` : ""}`;
       const details = document.createElement("p");
       details.textContent = `${delivery.deliveryType === "manual" ? "Manual send" : `Scheduled attempt ${delivery.attemptNumber}`} at ${fullWibDate(delivery.attemptedAt)}`;
       content.append(title, details);
@@ -511,8 +561,13 @@ function initializeTheme() {
 }
 
 elements.form.addEventListener("submit", submitForm);
-elements.message.addEventListener("input", () => {
-  elements.messageCount.value = `${elements.message.value.length} / 4096`;
+elements.sendCount.addEventListener("change", renderMessageFields);
+elements.messageFields.addEventListener("input", (event) => {
+  if (!(event.target instanceof HTMLTextAreaElement)) return;
+  const index = Number(event.target.dataset.messageIndex);
+  state.messageDrafts[index] = event.target.value;
+  const counter = event.target.previousElementSibling?.querySelector("output");
+  if (counter) counter.textContent = `${event.target.value.length} / 4096`;
 });
 elements.cancelEdit.addEventListener("click", resetForm);
 elements.refreshGroups.addEventListener("click", loadGroups);

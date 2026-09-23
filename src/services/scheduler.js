@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import cron from "node-cron";
 import { config } from "../config.js";
 import { pool, withTransaction } from "../db/index.js";
+import { parseStoredMessages } from "../lib/messages.js";
 import { nextOccurrence } from "../lib/time.js";
 import { logger } from "../logger.js";
 import { sendText } from "./waha.js";
@@ -58,20 +59,23 @@ function backoffSeconds(retryCount) {
   return Math.min(30 * 2 ** Math.max(retryCount - 1, 0), 15 * 60);
 }
 
-async function recordSuccess(reminder, response) {
+async function recordMessageSuccess(reminder, messageIndex, response) {
   const messageId = response?.id || response?.key?.id || response?.messageId || null;
+  await pool.execute(
+    `INSERT INTO reminder_deliveries
+      (reminder_id, delivery_type, message_index, scheduled_for, sent_at, attempt_number, status, waha_message_id, waha_response)
+     VALUES (?, 'scheduled', ?, ?, UTC_TIMESTAMP(3), ?, 'sent', ?, ?)`,
+    [reminder.id, messageIndex, reminder.next_run_at, reminder.retry_count + 1, messageId, JSON.stringify(response ?? null)]
+  );
+  logger.info({ reminderId: reminder.id, groupId: reminder.group_id, messageIndex, messageId }, "Reminder message sent");
+}
+
+async function completeReminder(reminder, messageCount) {
   const nextRunAt = reminder.schedule_type === "one_time"
     ? null
     : nextOccurrence(reminder.next_run_at, reminder.schedule_type, reminder.timezone);
 
   await withTransaction(async (connection) => {
-    await connection.execute(
-      `INSERT INTO reminder_deliveries
-        (reminder_id, delivery_type, scheduled_for, sent_at, attempt_number, status, waha_message_id, waha_response)
-       VALUES (?, 'scheduled', ?, UTC_TIMESTAMP(3), ?, 'sent', ?, ?)`,
-      [reminder.id, reminder.next_run_at, reminder.retry_count + 1, messageId, JSON.stringify(response ?? null)]
-    );
-
     if (reminder.schedule_type === "one_time") {
       await connection.execute(
         `UPDATE reminders
@@ -90,11 +94,10 @@ async function recordSuccess(reminder, response) {
       );
     }
   });
-
-  logger.info({ reminderId: reminder.id, groupId: reminder.group_id, messageId }, "Reminder sent");
+  logger.info({ reminderId: reminder.id, groupId: reminder.group_id, messageCount }, "Reminder sequence completed");
 }
 
-async function recordFailure(reminder, error) {
+async function recordFailure(reminder, messageIndex, error) {
   const retryCount = reminder.retry_count + 1;
   const willRetry = retryCount <= reminder.max_retries;
   const delaySeconds = backoffSeconds(retryCount);
@@ -103,9 +106,9 @@ async function recordFailure(reminder, error) {
   await withTransaction(async (connection) => {
     await connection.execute(
       `INSERT INTO reminder_deliveries
-        (reminder_id, delivery_type, scheduled_for, attempt_number, status, error_message)
-       VALUES (?, 'scheduled', ?, ?, 'failed', ?)`,
-      [reminder.id, reminder.next_run_at, retryCount, errorMessage]
+        (reminder_id, delivery_type, message_index, scheduled_for, attempt_number, status, error_message)
+       VALUES (?, 'scheduled', ?, ?, ?, 'failed', ?)`,
+      [reminder.id, messageIndex, reminder.next_run_at, retryCount, errorMessage]
     );
 
     if (willRetry) {
@@ -127,16 +130,32 @@ async function recordFailure(reminder, error) {
     }
   });
 
-  logger.warn({ reminderId: reminder.id, retryCount, willRetry, err: error }, "Reminder delivery failed");
+  logger.warn({ reminderId: reminder.id, messageIndex, retryCount, willRetry, err: error }, "Reminder message delivery failed");
 }
 
 export async function processReminder(reminder) {
-  try {
-    const response = await sendText({ groupId: reminder.group_id, message: reminder.message });
-    await recordSuccess(reminder, response);
-  } catch (error) {
-    await recordFailure(reminder, error);
+  const messages = parseStoredMessages(reminder.messages, reminder.message);
+  const [sentRows] = await pool.execute(
+    `SELECT DISTINCT message_index
+     FROM reminder_deliveries
+     WHERE reminder_id = ? AND delivery_type = 'scheduled' AND scheduled_for = ?
+       AND status = 'sent' AND message_index IS NOT NULL`,
+    [reminder.id, reminder.next_run_at]
+  );
+  const sentIndexes = new Set(sentRows.map((row) => Number(row.message_index)));
+
+  for (const [messageIndex, message] of messages.entries()) {
+    if (sentIndexes.has(messageIndex)) continue;
+    try {
+      const response = await sendText({ groupId: reminder.group_id, message });
+      await recordMessageSuccess(reminder, messageIndex, response);
+    } catch (error) {
+      await recordFailure(reminder, messageIndex, error);
+      return;
+    }
   }
+
+  await completeReminder(reminder, messages.length);
 }
 
 export async function runSchedulerTick() {
@@ -163,4 +182,3 @@ export function stopScheduler() {
   task?.stop();
   task = undefined;
 }
-

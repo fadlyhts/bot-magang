@@ -27,6 +27,24 @@ export async function migrate() {
     for (const statement of statements) {
       await connection.query(statement);
     }
+
+    const [messageColumns] = await connection.execute(
+      `SELECT COUNT(*) AS count FROM information_schema.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'reminders' AND COLUMN_NAME = 'messages'`
+    );
+    if (!Number(messageColumns[0].count)) {
+      await connection.query("ALTER TABLE reminders ADD COLUMN messages JSON NULL AFTER message");
+    }
+
+    const [deliveryColumns] = await connection.execute(
+      `SELECT COUNT(*) AS count FROM information_schema.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'reminder_deliveries' AND COLUMN_NAME = 'message_index'`
+    );
+    if (!Number(deliveryColumns[0].count)) {
+      await connection.query("ALTER TABLE reminder_deliveries ADD COLUMN message_index SMALLINT UNSIGNED NULL AFTER delivery_type");
+    }
+
+    await connection.query("UPDATE reminders SET messages = JSON_ARRAY(message) WHERE messages IS NULL OR JSON_LENGTH(messages) = 0");
     logger.info("Database migration completed");
   } finally {
     connection.release();
@@ -47,4 +65,3 @@ export async function withTransaction(work) {
     connection.release();
   }
 }
-

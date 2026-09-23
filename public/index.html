@@ -93,13 +93,24 @@
             <p class="field-help">The selected time is interpreted as WIB.</p>
           </div>
 
-          <div class="field">
-            <div class="label-row">
-              <label for="message">Message</label>
-              <output id="message-count" for="message">0 / 4096</output>
-            </div>
-            <textarea id="message" name="message" rows="6" maxlength="4096" required placeholder="Write the reminder exactly as the group should receive it."></textarea>
+          <div class="field compact-field">
+            <label for="send-count">Messages per schedule</label>
+            <select id="send-count" name="sendCount">
+              <option value="1" selected>1 message</option>
+              <option value="2">2 messages</option>
+              <option value="3">3 messages</option>
+              <option value="4">4 messages</option>
+              <option value="5">5 messages</option>
+              <option value="6">6 messages</option>
+              <option value="7">7 messages</option>
+              <option value="8">8 messages</option>
+              <option value="9">9 messages</option>
+              <option value="10">10 messages</option>
+            </select>
+            <p class="field-help">Messages are sent in order when the schedule runs.</p>
           </div>
+
+          <div class="message-fields" id="message-fields" aria-live="polite"></div>
 
           <div class="field compact-field">
             <label for="max-retries">Retries after a failed send</label>
