@@ -1,4 +1,25 @@
-export function parseStoredMessages(value, fallback = "") {
+function normalizeMessageItem(item) {
+  if (typeof item === "string" && item.length) {
+    return { type: "text", text: item };
+  }
+
+  if (item?.type === "text" && typeof item.text === "string" && item.text.length) {
+    return { type: "text", text: item.text };
+  }
+
+  if (item?.type === "poll" && typeof item.question === "string" && Array.isArray(item.options)) {
+    return {
+      type: "poll",
+      question: item.question,
+      options: item.options.filter((option) => typeof option === "string" && option.length),
+      multipleAnswers: Boolean(item.multipleAnswers)
+    };
+  }
+
+  return null;
+}
+
+export function parseStoredMessageItems(value, fallback = "") {
   let parsed = value;
   if (typeof value === "string") {
     try {
@@ -9,9 +30,13 @@ export function parseStoredMessages(value, fallback = "") {
   }
 
   if (Array.isArray(parsed)) {
-    const messages = parsed.filter((message) => typeof message === "string" && message.length);
-    if (messages.length) return messages;
+    const items = parsed.map(normalizeMessageItem).filter(Boolean);
+    if (items.length) return items;
   }
 
-  return fallback ? [fallback] : [];
+  return fallback ? [{ type: "text", text: fallback }] : [];
+}
+
+export function messageItemSummary(item) {
+  return item.type === "poll" ? item.question : item.text;
 }

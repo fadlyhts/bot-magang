@@ -4,38 +4,61 @@ import { z } from "zod";
 import { config } from "../config.js";
 import { pool, withTransaction } from "../db/index.js";
 import { AppError } from "../lib/errors.js";
-import { parseStoredMessages } from "../lib/messages.js";
+import { messageItemSummary, parseStoredMessageItems } from "../lib/messages.js";
 import { formatLocalSql, localDateTimeToUtc, sqlNow, utcSqlToIso } from "../lib/time.js";
-import { sendText } from "./waha.js";
+import { sendMessageItem } from "./waha.js";
 
 const messageSchema = z.string().trim().min(1, "Write every message before scheduling.").max(4096);
+const pollOptionSchema = z.string().trim().min(1, "Write every voting option.").max(100);
+const messageItemSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("text"),
+    text: messageSchema
+  }),
+  z.object({
+    type: z.literal("poll"),
+    question: z.string().trim().min(1, "Write the voting question.").max(255),
+    options: z.array(pollOptionSchema).min(2, "Voting needs at least two options.").max(12),
+    multipleAnswers: z.boolean().default(false)
+  }).superRefine((poll, context) => {
+    const normalized = poll.options.map((option) => option.toLocaleLowerCase("id-ID"));
+    if (new Set(normalized).size !== normalized.length) {
+      context.addIssue({ code: "custom", path: ["options"], message: "Voting options must be different." });
+    }
+  })
+]);
 
 export const reminderInputSchema = z.object({
   groupId: z.string().min(1).max(128).refine((value) => value.endsWith("@g.us"), "Select a WhatsApp group."),
   groupName: z.string().min(1).max(255),
   message: messageSchema.optional(),
   messages: z.array(messageSchema).min(1).max(10).optional(),
+  messageItems: z.array(messageItemSchema).min(1).max(10).optional(),
   scheduleType: z.enum(["one_time", "daily", "weekday", "weekly"]),
   scheduledAt: z.string().min(1),
   timezone: z.string().default(config.timezone),
   maxRetries: z.coerce.number().int().min(0).max(10).default(3)
 }).superRefine((input, context) => {
-  if (!input.messages?.length && !input.message) {
-    context.addIssue({ code: "custom", path: ["messages"], message: "Add at least one message." });
+  if (!input.messageItems?.length && !input.messages?.length && !input.message) {
+    context.addIssue({ code: "custom", path: ["messageItems"], message: "Add at least one message." });
   }
 }).transform((input) => ({
   ...input,
-  messages: input.messages?.length ? input.messages : [input.message]
+  messageItems: input.messageItems?.length
+    ? input.messageItems
+    : (input.messages?.length ? input.messages : [input.message]).map((text) => ({ type: "text", text }))
 }));
 
 function serializeReminder(row) {
-  const messages = parseStoredMessages(row.messages, row.message);
+  const messageItems = parseStoredMessageItems(row.messages, row.message);
+  const messages = messageItems.map(messageItemSummary);
   return {
     id: row.id,
     groupId: row.group_id,
     groupName: row.group_name,
     message: messages[0] || row.message,
     messages,
+    messageItems,
     scheduleType: row.schedule_type,
     timezone: row.timezone,
     scheduledLocal: row.scheduled_local?.replace(" ", "T").replace(/\.000$/, ""),
@@ -109,7 +132,7 @@ export async function createReminder(payload) {
     `INSERT INTO reminders
       (id, group_id, group_name, message, messages, schedule_type, timezone, scheduled_local, next_run_at, next_attempt_at, max_retries)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [id, input.groupId, input.groupName, input.messages[0], JSON.stringify(input.messages), input.scheduleType, input.timezone, scheduledLocal, nextRunAt, nextRunAt, input.maxRetries]
+    [id, input.groupId, input.groupName, messageItemSummary(input.messageItems[0]), JSON.stringify(input.messageItems), input.scheduleType, input.timezone, scheduledLocal, nextRunAt, nextRunAt, input.maxRetries]
   );
 
   return serializeReminder(await getReminder(id));
@@ -134,7 +157,7 @@ export async function updateReminder(id, payload) {
         next_run_at = ?, next_attempt_at = ?, status = 'scheduled', retry_count = 0, last_error = NULL,
         lock_token = NULL, locked_at = NULL
        WHERE id = ?`,
-      [input.groupId, input.groupName, input.messages[0], JSON.stringify(input.messages), input.scheduleType, input.timezone, scheduledLocal, nextRunAt, nextRunAt, id]
+      [input.groupId, input.groupName, messageItemSummary(input.messageItems[0]), JSON.stringify(input.messageItems), input.scheduleType, input.timezone, scheduledLocal, nextRunAt, nextRunAt, id]
     );
   });
 
@@ -186,7 +209,7 @@ export async function listDeliveries(id) {
 
 export async function sendReminderNow(id) {
   const reminder = await getReminder(id);
-  const messages = parseStoredMessages(reminder.messages, reminder.message);
+  const messageItems = parseStoredMessageItems(reminder.messages, reminder.message);
   const [countRows] = await pool.query(
     "SELECT COALESCE(MAX(attempt_number), 0) AS count FROM reminder_deliveries WHERE reminder_id = ? AND delivery_type = 'manual'",
     [id]
@@ -194,9 +217,9 @@ export async function sendReminderNow(id) {
   const attemptNumber = Number(countRows[0].count) + 1;
   const messageIds = [];
 
-  for (const [messageIndex, message] of messages.entries()) {
+  for (const [messageIndex, item] of messageItems.entries()) {
     try {
-      const response = await sendText({ groupId: reminder.group_id, message });
+      const response = await sendMessageItem({ groupId: reminder.group_id, item });
       const messageId = response?.id || response?.key?.id || response?.messageId || null;
       messageIds.push(messageId);
       await pool.execute(
@@ -216,5 +239,5 @@ export async function sendReminderNow(id) {
     }
   }
 
-  return { status: "sent", messageCount: messages.length, messageIds };
+  return { status: "sent", messageCount: messageItems.length, messageIds };
 }

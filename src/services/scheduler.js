@@ -2,10 +2,10 @@ import { randomUUID } from "node:crypto";
 import cron from "node-cron";
 import { config } from "../config.js";
 import { pool, withTransaction } from "../db/index.js";
-import { parseStoredMessages } from "../lib/messages.js";
+import { parseStoredMessageItems } from "../lib/messages.js";
 import { nextOccurrence } from "../lib/time.js";
 import { logger } from "../logger.js";
-import { sendText } from "./waha.js";
+import { sendMessageItem } from "./waha.js";
 
 let running = false;
 let task;
@@ -134,7 +134,7 @@ async function recordFailure(reminder, messageIndex, error) {
 }
 
 export async function processReminder(reminder) {
-  const messages = parseStoredMessages(reminder.messages, reminder.message);
+  const messageItems = parseStoredMessageItems(reminder.messages, reminder.message);
   const [sentRows] = await pool.execute(
     `SELECT DISTINCT message_index
      FROM reminder_deliveries
@@ -144,10 +144,10 @@ export async function processReminder(reminder) {
   );
   const sentIndexes = new Set(sentRows.map((row) => Number(row.message_index)));
 
-  for (const [messageIndex, message] of messages.entries()) {
+  for (const [messageIndex, item] of messageItems.entries()) {
     if (sentIndexes.has(messageIndex)) continue;
     try {
-      const response = await sendText({ groupId: reminder.group_id, message });
+      const response = await sendMessageItem({ groupId: reminder.group_id, item });
       await recordMessageSuccess(reminder, messageIndex, response);
     } catch (error) {
       await recordFailure(reminder, messageIndex, error);
@@ -155,7 +155,7 @@ export async function processReminder(reminder) {
     }
   }
 
-  await completeReminder(reminder, messages.length);
+  await completeReminder(reminder, messageItems.length);
 }
 
 export async function runSchedulerTick() {

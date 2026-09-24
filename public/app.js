@@ -30,8 +30,14 @@ const state = {
   reminders: [],
   groups: [],
   editingId: null,
-  messageDrafts: [""]
+  messageDrafts: [{ type: "text", text: "" }]
 };
+
+function emptyMessageItem(type = "text") {
+  return type === "poll"
+    ? { type: "poll", question: "", options: ["", ""], multipleAnswers: false }
+    : { type: "text", text: "" };
+}
 
 const statusLabels = {
   scheduled: "Scheduled",
@@ -193,12 +199,30 @@ function renderReminder(reminder) {
   status.textContent = statusLabels[reminder.status] || reminder.status;
   titleRow.append(title, status);
 
-  const messages = reminder.messages?.length ? reminder.messages : [reminder.message];
-  const messageList = document.createElement(messages.length > 1 ? "ol" : "div");
-  messageList.className = messages.length > 1 ? "reminder-messages" : "reminder-message";
-  for (const messageText of messages) {
-    const message = document.createElement(messages.length > 1 ? "li" : "p");
-    message.textContent = messageText;
+  const messageItems = reminder.messageItems?.length
+    ? reminder.messageItems
+    : (reminder.messages?.length ? reminder.messages : [reminder.message]).map((text) => ({ type: "text", text }));
+  const messageList = document.createElement(messageItems.length > 1 ? "ol" : "div");
+  messageList.className = messageItems.length > 1 ? "reminder-messages" : "reminder-message";
+  for (const item of messageItems) {
+    const message = document.createElement(messageItems.length > 1 ? "li" : "div");
+    if (item.type === "poll") {
+      const question = document.createElement("strong");
+      question.textContent = `Voting: ${item.question}`;
+      const options = document.createElement("ul");
+      options.className = "poll-options";
+      options.replaceChildren(...item.options.map((option) => {
+        const choice = document.createElement("li");
+        choice.textContent = option;
+        return choice;
+      }));
+      const answerRule = document.createElement("span");
+      answerRule.className = "poll-answer-rule";
+      answerRule.textContent = item.multipleAnswers ? "Multiple answers allowed" : "One answer only";
+      message.append(question, options, answerRule);
+    } else {
+      message.textContent = item.text;
+    }
     messageList.append(message);
   }
 
@@ -207,7 +231,7 @@ function renderReminder(reminder) {
   const repeat = document.createElement("span");
   repeat.textContent = repeatLabels[reminder.scheduleType] || reminder.scheduleType;
   const messageTotal = document.createElement("span");
-  messageTotal.textContent = `${messages.length} message${messages.length === 1 ? "" : "s"}`;
+  messageTotal.textContent = `${messageItems.length} message${messageItems.length === 1 ? "" : "s"}`;
   const attempts = document.createElement("span");
   attempts.textContent = reminder.retryCount ? `${reminder.retryCount} failed attempt${reminder.retryCount === 1 ? "" : "s"}` : "No failed attempts";
   meta.append(repeat, messageTotal, attempts);
@@ -330,7 +354,7 @@ async function loadGroups() {
   } catch (error) {
     state.groups = [];
     renderGroupOptions();
-    elements.groupHelp.textContent = `${error.message} Connect the session in the WAHA dashboard on port 3000, then reload.`;
+    elements.groupHelp.textContent = `${error.message} Check WAHA_URL and the connected session, then reload.`;
   } finally {
     elements.refreshGroups.disabled = false;
   }
@@ -341,7 +365,10 @@ function formPayload() {
   return {
     groupId: elements.groupSelect.value,
     groupName: selected?.dataset.groupName || selected?.textContent || "",
-    messages: [...elements.messageFields.querySelectorAll("textarea")].map((field) => field.value),
+    messageItems: state.messageDrafts.slice(0, Number(elements.sendCount.value)).map((item) => ({
+      ...item,
+      options: item.type === "poll" ? [...item.options] : undefined
+    })),
     scheduleType: new FormData(elements.form).get("scheduleType"),
     scheduledAt: elements.scheduledAt.value,
     timezone: WIB_TIMEZONE,
@@ -351,33 +378,122 @@ function formPayload() {
 
 function renderMessageFields() {
   const count = Number(elements.sendCount.value);
-  while (state.messageDrafts.length < count) state.messageDrafts.push("");
+  while (state.messageDrafts.length < count) state.messageDrafts.push(emptyMessageItem());
 
   const fields = [];
   for (let index = 0; index < count; index += 1) {
+    const item = state.messageDrafts[index];
     const field = document.createElement("div");
     field.className = "field message-field";
 
     const labelRow = document.createElement("div");
     labelRow.className = "label-row";
-    const label = document.createElement("label");
-    label.htmlFor = `message-${index + 1}`;
-    label.textContent = count === 1 ? "Message" : `Message ${index + 1}`;
-    const counter = document.createElement("output");
-    counter.htmlFor = label.htmlFor;
-    counter.textContent = `${state.messageDrafts[index].length} / 4096`;
-    labelRow.append(label, counter);
+    const heading = document.createElement("strong");
+    heading.textContent = count === 1 ? "Message" : `Message ${index + 1}`;
+    const typeLabel = document.createElement("label");
+    typeLabel.className = "message-type-label";
+    typeLabel.htmlFor = `message-type-${index + 1}`;
+    typeLabel.textContent = "Type";
+    const type = document.createElement("select");
+    type.id = typeLabel.htmlFor;
+    type.setAttribute("aria-label", count === 1 ? "Message type" : `Message ${index + 1} type`);
+    type.dataset.messageIndex = String(index);
+    type.dataset.role = "type";
+    type.append(new Option("Text", "text"), new Option("Voting", "poll"));
+    type.value = item.type;
+    typeLabel.append(type);
+    labelRow.append(heading, typeLabel);
+    field.append(labelRow);
 
-    const textarea = document.createElement("textarea");
-    textarea.id = label.htmlFor;
-    textarea.name = "messages";
-    textarea.rows = 4;
-    textarea.maxLength = 4096;
-    textarea.required = true;
-    textarea.placeholder = `Write message ${index + 1} exactly as the group should receive it.`;
-    textarea.value = state.messageDrafts[index];
-    textarea.dataset.messageIndex = String(index);
-    field.append(labelRow, textarea);
+    if (item.type === "poll") {
+      const questionLabel = document.createElement("label");
+      questionLabel.htmlFor = `poll-question-${index + 1}`;
+      questionLabel.textContent = count === 1 ? "Voting question" : `Message ${index + 1} voting question`;
+      const question = document.createElement("input");
+      question.id = questionLabel.htmlFor;
+      question.type = "text";
+      question.maxLength = 255;
+      question.required = true;
+      question.placeholder = "Example: Which lunch menu should we order?";
+      question.value = item.question;
+      question.dataset.messageIndex = String(index);
+      question.dataset.role = "question";
+      field.append(questionLabel, question);
+
+      const options = document.createElement("fieldset");
+      options.className = "poll-option-fields";
+      const legend = document.createElement("legend");
+      legend.textContent = "Voting options";
+      options.append(legend);
+      item.options.forEach((option, optionIndex) => {
+        const row = document.createElement("div");
+        row.className = "poll-option-row";
+        const optionLabel = document.createElement("label");
+        optionLabel.htmlFor = `poll-${index + 1}-option-${optionIndex + 1}`;
+        optionLabel.textContent = `Option ${optionIndex + 1}`;
+        const input = document.createElement("input");
+        input.id = optionLabel.htmlFor;
+        input.type = "text";
+        input.maxLength = 100;
+        input.required = true;
+        input.value = option;
+        input.dataset.messageIndex = String(index);
+        input.dataset.optionIndex = String(optionIndex);
+        input.dataset.role = "option";
+        row.append(optionLabel, input);
+        if (item.options.length > 2) {
+          const remove = document.createElement("button");
+          remove.type = "button";
+          remove.className = "quiet-button poll-option-remove";
+          remove.textContent = "Remove";
+          remove.dataset.action = "remove-poll-option";
+          remove.dataset.messageIndex = String(index);
+          remove.dataset.optionIndex = String(optionIndex);
+          row.append(remove);
+        }
+        options.append(row);
+      });
+      if (item.options.length < 12) {
+        const addOption = document.createElement("button");
+        addOption.type = "button";
+        addOption.className = "text-button add-poll-option";
+        addOption.textContent = "Add voting option";
+        addOption.dataset.action = "add-poll-option";
+        addOption.dataset.messageIndex = String(index);
+        options.append(addOption);
+      }
+
+      const multipleLabel = document.createElement("label");
+      multipleLabel.className = "multiple-answer-control";
+      const multiple = document.createElement("input");
+      multiple.type = "checkbox";
+      multiple.checked = item.multipleAnswers;
+      multiple.dataset.messageIndex = String(index);
+      multiple.dataset.role = "multipleAnswers";
+      multipleLabel.append(multiple, " Allow people to choose more than one answer");
+      field.append(options, multipleLabel);
+    } else {
+      const label = document.createElement("label");
+      label.htmlFor = `message-${index + 1}`;
+      label.textContent = count === 1 ? "Message text" : `Message ${index + 1} text`;
+      const counter = document.createElement("output");
+      counter.setAttribute("for", label.htmlFor);
+      counter.textContent = `${item.text.length} / 4096`;
+      const textLabelRow = document.createElement("div");
+      textLabelRow.className = "label-row text-label-row";
+      textLabelRow.append(label, counter);
+      const textarea = document.createElement("textarea");
+      textarea.id = label.htmlFor;
+      textarea.name = "messages";
+      textarea.rows = 4;
+      textarea.maxLength = 4096;
+      textarea.required = true;
+      textarea.placeholder = `Write message ${index + 1} exactly as the group should receive it.`;
+      textarea.value = item.text;
+      textarea.dataset.messageIndex = String(index);
+      textarea.dataset.role = "text";
+      field.append(textLabelRow, textarea);
+    }
     fields.push(field);
   }
   elements.messageFields.replaceChildren(...fields);
@@ -391,7 +507,7 @@ function showFormError(message) {
 function resetForm() {
   state.editingId = null;
   elements.form.reset();
-  state.messageDrafts = [""];
+  state.messageDrafts = [emptyMessageItem()];
   elements.sendCount.value = "1";
   renderMessageFields();
   elements.scheduledAt.value = wibInputValue();
@@ -412,7 +528,9 @@ function editReminder(id) {
     renderGroupOptions();
   }
   elements.groupSelect.value = reminder.groupId;
-  state.messageDrafts = reminder.messages?.length ? [...reminder.messages] : [reminder.message];
+  state.messageDrafts = reminder.messageItems?.length
+    ? structuredClone(reminder.messageItems)
+    : (reminder.messages?.length ? reminder.messages : [reminder.message]).map((text) => ({ type: "text", text }));
   elements.sendCount.value = String(state.messageDrafts.length);
   renderMessageFields();
   elements.scheduledAt.value = reminder.scheduledLocal.slice(0, 16);
@@ -563,11 +681,41 @@ function initializeTheme() {
 elements.form.addEventListener("submit", submitForm);
 elements.sendCount.addEventListener("change", renderMessageFields);
 elements.messageFields.addEventListener("input", (event) => {
-  if (!(event.target instanceof HTMLTextAreaElement)) return;
+  if (!(event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement)) return;
   const index = Number(event.target.dataset.messageIndex);
-  state.messageDrafts[index] = event.target.value;
-  const counter = event.target.previousElementSibling?.querySelector("output");
-  if (counter) counter.textContent = `${event.target.value.length} / 4096`;
+  const item = state.messageDrafts[index];
+  if (!item) return;
+  if (event.target.dataset.role === "text" && item.type === "text") {
+    item.text = event.target.value;
+    const counter = event.target.closest(".message-field")?.querySelector("output");
+    if (counter) counter.textContent = `${event.target.value.length} / 4096`;
+  }
+  if (event.target.dataset.role === "question" && item.type === "poll") item.question = event.target.value;
+  if (event.target.dataset.role === "option" && item.type === "poll") {
+    item.options[Number(event.target.dataset.optionIndex)] = event.target.value;
+  }
+});
+elements.messageFields.addEventListener("change", (event) => {
+  const index = Number(event.target.dataset.messageIndex);
+  if (event.target.dataset.role === "type") {
+    state.messageDrafts[index] = emptyMessageItem(event.target.value);
+    renderMessageFields();
+  }
+  if (event.target.dataset.role === "multipleAnswers" && state.messageDrafts[index]?.type === "poll") {
+    state.messageDrafts[index].multipleAnswers = event.target.checked;
+  }
+});
+elements.messageFields.addEventListener("click", (event) => {
+  const control = event.target.closest("button[data-action]");
+  if (!control) return;
+  const index = Number(control.dataset.messageIndex);
+  const item = state.messageDrafts[index];
+  if (item?.type !== "poll") return;
+  if (control.dataset.action === "add-poll-option" && item.options.length < 12) item.options.push("");
+  if (control.dataset.action === "remove-poll-option" && item.options.length > 2) {
+    item.options.splice(Number(control.dataset.optionIndex), 1);
+  }
+  renderMessageFields();
 });
 elements.cancelEdit.addEventListener("click", resetForm);
 elements.refreshGroups.addEventListener("click", loadGroups);

@@ -77,3 +77,30 @@ export async function sendText({ groupId, message }) {
     })
   });
 }
+
+export async function sendPoll({ groupId, question, options, multipleAnswers }) {
+  return request("/api/sendPoll", {
+    method: "POST",
+    body: JSON.stringify({
+      session: config.waha.session,
+      chatId: groupId,
+      poll: {
+        name: question,
+        options,
+        multipleAnswers
+      }
+    })
+  });
+}
+
+export function sendMessageItem({ groupId, item }) {
+  if (item.type === "poll") {
+    return sendPoll({
+      groupId,
+      question: item.question,
+      options: item.options,
+      multipleAnswers: item.multipleAnswers
+    });
+  }
+  return sendText({ groupId, message: item.text });
+}
