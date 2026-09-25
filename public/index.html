@@ -83,15 +83,22 @@
               <label><input type="radio" name="scheduleType" value="daily"> Daily</label>
               <label><input type="radio" name="scheduleType" value="weekday"> Weekdays</label>
               <label><input type="radio" name="scheduleType" value="weekly"> Weekly</label>
+              <label><input type="radio" name="scheduleType" value="custom_weekly"> Custom days</label>
             </div>
-            <p class="field-help">Weekdays run Monday through Friday.</p>
+            <p class="field-help" id="repeat-help">All recurring times use WIB.</p>
           </fieldset>
 
           <div class="field">
-            <label for="scheduled-at">First send time</label>
+            <label for="scheduled-at" id="scheduled-at-label">First send time</label>
             <input id="scheduled-at" name="scheduledAt" type="datetime-local" step="60" required>
-            <p class="field-help">The selected time is interpreted as WIB.</p>
+            <p class="field-help" id="scheduled-at-help">The selected time is interpreted as WIB.</p>
           </div>
+
+          <fieldset class="field custom-schedule" id="custom-schedule" hidden>
+            <legend>Times for each day</legend>
+            <p class="field-help">Each selected time sends the full message sequence.</p>
+            <div class="custom-day-list" id="custom-day-list"></div>
+          </fieldset>
 
           <div class="field compact-field">
             <label for="send-count">Messages per schedule</label>

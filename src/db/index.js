@@ -36,6 +36,14 @@ export async function migrate() {
       await connection.query("ALTER TABLE reminders ADD COLUMN messages JSON NULL AFTER message");
     }
 
+    const [customScheduleColumns] = await connection.execute(
+      `SELECT COUNT(*) AS count FROM information_schema.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'reminders' AND COLUMN_NAME = 'custom_schedule'`
+    );
+    if (!Number(customScheduleColumns[0].count)) {
+      await connection.query("ALTER TABLE reminders ADD COLUMN custom_schedule JSON NULL AFTER schedule_type");
+    }
+
     const [deliveryColumns] = await connection.execute(
       `SELECT COUNT(*) AS count FROM information_schema.COLUMNS
        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'reminder_deliveries' AND COLUMN_NAME = 'message_index'`

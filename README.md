@@ -5,7 +5,7 @@ A small JavaScript service for scheduling WhatsApp group reminders through WAHA.
 ## What it does
 
 - Sends to WhatsApp groups that the connected number has already joined
-- Supports one-time, daily, weekdays (Monday to Friday), and weekly schedules
+- Supports one-time, daily, weekdays, weekly, and custom times for each day
 - Sends 1 to 10 custom text or voting messages in order from one scheduled reminder
 - Stores reminder state and delivery history in MySQL
 - Retries failed scheduled sends and recovers work left in progress after a restart
@@ -30,6 +30,8 @@ Requirements: Docker Desktop with Docker Compose.
 
 Set **Messages per schedule** to create a sequence. Each entry can be plain text or WhatsApp voting. Voting supports 2 to 12 custom options and can allow one or multiple answers. WAHA sends every entry in order when the schedule runs. If a scheduled entry fails, the retry continues from that entry instead of repeating entries already recorded as sent.
 
+Choose **Custom days** when working hours differ. The default matches Monday through Thursday at 08:00 and 17:00, then Friday at 08:00 and 13:00. Days can be enabled or disabled, and each day can contain up to eight WIB send times. Every selected time sends the full message sequence.
+
 The browser may cache Basic Authentication credentials. Use a private window when testing a different administrator account.
 
 ## Schedule behavior
@@ -40,6 +42,7 @@ The browser may cache Basic Authentication credentials. Use a private window whe
 | Daily | Sends every day at the selected WIB time |
 | Weekdays | Sends Monday through Friday at the selected WIB time |
 | Weekly | Sends every seven days from the selected date |
+| Custom days | Sends at every selected day and time, with different WIB times allowed per day |
 
 Dates are converted to UTC before storage. Recurring dates are calculated in `Asia/Jakarta`, so the displayed local time remains stable.
 

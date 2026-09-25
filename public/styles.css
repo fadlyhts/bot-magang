@@ -290,6 +290,8 @@ textarea:disabled {
 
 select,
 input[type="text"],
+input[type="date"],
+input[type="time"],
 input[type="datetime-local"],
 textarea {
   width: 100%;
@@ -382,6 +384,10 @@ fieldset {
   background: var(--primary);
 }
 
+.choice-row label:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+}
+
 .choice-row input {
   width: 17px;
   height: 17px;
@@ -391,6 +397,65 @@ fieldset {
 
 .compact-field select {
   max-width: 180px;
+}
+
+.custom-schedule > .field-help {
+  margin-top: 0;
+}
+
+.custom-day-list {
+  margin-top: 12px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.custom-day-row {
+  display: grid;
+  grid-template-columns: minmax(104px, 0.34fr) minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+  padding: 13px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.custom-day-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  font-weight: 680;
+}
+
+.custom-day-toggle input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--primary);
+}
+
+.custom-day-off {
+  align-self: center;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.custom-time-list {
+  display: grid;
+  gap: 8px;
+}
+
+.custom-time-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.custom-time-remove {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.custom-time-add {
+  justify-self: start;
 }
 
 .form-error,
@@ -821,6 +886,16 @@ fieldset {
 
   .choice-row label {
     justify-content: flex-start;
+  }
+
+  .custom-day-row {
+    grid-template-columns: 1fr;
+    gap: 5px;
+  }
+
+  .custom-day-off {
+    min-height: 32px;
+    padding-left: 26px;
   }
 
   .queue-tools {

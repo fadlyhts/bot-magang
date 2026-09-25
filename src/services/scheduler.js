@@ -3,7 +3,7 @@ import cron from "node-cron";
 import { config } from "../config.js";
 import { pool, withTransaction } from "../db/index.js";
 import { parseStoredMessageItems } from "../lib/messages.js";
-import { nextOccurrence } from "../lib/time.js";
+import { nextCustomOccurrence, nextOccurrence, parseCustomSchedule } from "../lib/time.js";
 import { logger } from "../logger.js";
 import { sendMessageItem } from "./waha.js";
 
@@ -73,7 +73,9 @@ async function recordMessageSuccess(reminder, messageIndex, response) {
 async function completeReminder(reminder, messageCount) {
   const nextRunAt = reminder.schedule_type === "one_time"
     ? null
-    : nextOccurrence(reminder.next_run_at, reminder.schedule_type, reminder.timezone);
+    : (reminder.schedule_type === "custom_weekly"
+        ? nextCustomOccurrence(reminder.next_run_at, parseCustomSchedule(reminder.custom_schedule), reminder.timezone)
+        : nextOccurrence(reminder.next_run_at, reminder.schedule_type, reminder.timezone));
 
   await withTransaction(async (connection) => {
     if (reminder.schedule_type === "one_time") {

@@ -4,7 +4,8 @@ CREATE TABLE IF NOT EXISTS reminders (
   group_name VARCHAR(255) NOT NULL,
   message TEXT NOT NULL,
   messages JSON NULL,
-  schedule_type ENUM('one_time', 'daily', 'weekday', 'weekly') NOT NULL,
+  schedule_type ENUM('one_time', 'daily', 'weekday', 'weekly', 'custom_weekly') NOT NULL,
+  custom_schedule JSON NULL,
   timezone VARCHAR(64) NOT NULL DEFAULT 'Asia/Jakarta',
   scheduled_local DATETIME(3) NOT NULL,
   next_run_at DATETIME(3) NULL,
@@ -24,7 +25,7 @@ CREATE TABLE IF NOT EXISTS reminders (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 ALTER TABLE reminders
-  MODIFY COLUMN schedule_type ENUM('one_time', 'daily', 'weekday', 'weekly') NOT NULL;
+  MODIFY COLUMN schedule_type ENUM('one_time', 'daily', 'weekday', 'weekly', 'custom_weekly') NOT NULL;
 
 CREATE TABLE IF NOT EXISTS reminder_deliveries (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,

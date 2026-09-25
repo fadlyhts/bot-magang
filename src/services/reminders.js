@@ -5,7 +5,7 @@ import { config } from "../config.js";
 import { pool, withTransaction } from "../db/index.js";
 import { AppError } from "../lib/errors.js";
 import { messageItemSummary, parseStoredMessageItems } from "../lib/messages.js";
-import { formatLocalSql, localDateTimeToUtc, sqlNow, utcSqlToIso } from "../lib/time.js";
+import { firstCustomOccurrence, formatLocalSql, localDateTimeToUtc, parseCustomSchedule, sqlNow, utcSqlToIso } from "../lib/time.js";
 import { sendMessageItem } from "./waha.js";
 
 const messageSchema = z.string().trim().min(1, "Write every message before scheduling.").max(4096);
@@ -27,6 +27,15 @@ const messageItemSchema = z.discriminatedUnion("type", [
     }
   })
 ]);
+const customTimeSchema = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/, "Use a valid time.");
+const customDaySchema = z.object({
+  weekday: z.coerce.number().int().min(1).max(7),
+  times: z.array(customTimeSchema).min(1).max(8)
+}).superRefine((day, context) => {
+  if (new Set(day.times).size !== day.times.length) {
+    context.addIssue({ code: "custom", path: ["times"], message: "Times on the same day must be different." });
+  }
+});
 
 export const reminderInputSchema = z.object({
   groupId: z.string().min(1).max(128).refine((value) => value.endsWith("@g.us"), "Select a WhatsApp group."),
@@ -34,7 +43,8 @@ export const reminderInputSchema = z.object({
   message: messageSchema.optional(),
   messages: z.array(messageSchema).min(1).max(10).optional(),
   messageItems: z.array(messageItemSchema).min(1).max(10).optional(),
-  scheduleType: z.enum(["one_time", "daily", "weekday", "weekly"]),
+  scheduleType: z.enum(["one_time", "daily", "weekday", "weekly", "custom_weekly"]),
+  customSchedule: z.array(customDaySchema).min(1).max(7).optional(),
   scheduledAt: z.string().min(1),
   timezone: z.string().default(config.timezone),
   maxRetries: z.coerce.number().int().min(0).max(10).default(3)
@@ -42,8 +52,20 @@ export const reminderInputSchema = z.object({
   if (!input.messageItems?.length && !input.messages?.length && !input.message) {
     context.addIssue({ code: "custom", path: ["messageItems"], message: "Add at least one message." });
   }
+  if (input.scheduleType === "custom_weekly" && !input.customSchedule?.length) {
+    context.addIssue({ code: "custom", path: ["customSchedule"], message: "Select at least one custom day and time." });
+  }
+  if (input.customSchedule?.length) {
+    const weekdays = input.customSchedule.map((day) => day.weekday);
+    if (new Set(weekdays).size !== weekdays.length) {
+      context.addIssue({ code: "custom", path: ["customSchedule"], message: "Each custom day can appear only once." });
+    }
+  }
 }).transform((input) => ({
   ...input,
+  customSchedule: input.scheduleType === "custom_weekly"
+    ? [...input.customSchedule].map((day) => ({ ...day, times: [...day.times].sort() })).sort((a, b) => a.weekday - b.weekday)
+    : null,
   messageItems: input.messageItems?.length
     ? input.messageItems
     : (input.messages?.length ? input.messages : [input.message]).map((text) => ({ type: "text", text }))
@@ -60,6 +82,7 @@ function serializeReminder(row) {
     messages,
     messageItems,
     scheduleType: row.schedule_type,
+    customSchedule: parseCustomSchedule(row.custom_schedule),
     timezone: row.timezone,
     scheduledLocal: row.scheduled_local?.replace(" ", "T").replace(/\.000$/, ""),
     nextRunAt: utcSqlToIso(row.next_run_at),
@@ -91,6 +114,14 @@ function serializeDelivery(row) {
 }
 
 function scheduleValues(input, allowPast = false) {
+  if (input.scheduleType === "custom_weekly") {
+    const nextRunAt = firstCustomOccurrence(input.customSchedule, input.timezone, input.scheduledAt);
+    return {
+      scheduledLocal: DateTime.fromISO(input.scheduledAt, { zone: input.timezone }).startOf("day").toFormat("yyyy-MM-dd HH:mm:ss.SSS"),
+      nextRunAt
+    };
+  }
+
   const nextRunAt = localDateTimeToUtc(input.scheduledAt, input.timezone);
   const parsed = DateTime.fromSQL(nextRunAt, { zone: "utc" });
   if (!allowPast && parsed <= DateTime.utc().minus({ seconds: 5 })) {
@@ -130,9 +161,9 @@ export async function createReminder(payload) {
 
   await pool.execute(
     `INSERT INTO reminders
-      (id, group_id, group_name, message, messages, schedule_type, timezone, scheduled_local, next_run_at, next_attempt_at, max_retries)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [id, input.groupId, input.groupName, messageItemSummary(input.messageItems[0]), JSON.stringify(input.messageItems), input.scheduleType, input.timezone, scheduledLocal, nextRunAt, nextRunAt, input.maxRetries]
+      (id, group_id, group_name, message, messages, schedule_type, custom_schedule, timezone, scheduled_local, next_run_at, next_attempt_at, max_retries)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [id, input.groupId, input.groupName, messageItemSummary(input.messageItems[0]), JSON.stringify(input.messageItems), input.scheduleType, input.customSchedule ? JSON.stringify(input.customSchedule) : null, input.timezone, scheduledLocal, nextRunAt, nextRunAt, input.maxRetries]
   );
 
   return serializeReminder(await getReminder(id));
@@ -153,11 +184,11 @@ export async function updateReminder(id, payload) {
     );
     await connection.execute(
       `UPDATE reminders SET
-        group_id = ?, group_name = ?, message = ?, messages = ?, schedule_type = ?, timezone = ?, scheduled_local = ?,
+        group_id = ?, group_name = ?, message = ?, messages = ?, schedule_type = ?, custom_schedule = ?, timezone = ?, scheduled_local = ?,
         next_run_at = ?, next_attempt_at = ?, status = 'scheduled', retry_count = 0, last_error = NULL,
         lock_token = NULL, locked_at = NULL
        WHERE id = ?`,
-      [input.groupId, input.groupName, messageItemSummary(input.messageItems[0]), JSON.stringify(input.messageItems), input.scheduleType, input.timezone, scheduledLocal, nextRunAt, nextRunAt, id]
+      [input.groupId, input.groupName, messageItemSummary(input.messageItems[0]), JSON.stringify(input.messageItems), input.scheduleType, input.customSchedule ? JSON.stringify(input.customSchedule) : null, input.timezone, scheduledLocal, nextRunAt, nextRunAt, id]
     );
   });
 

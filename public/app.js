@@ -14,7 +14,12 @@ const elements = {
   groupSelect: document.querySelector("#group-id"),
   groupHelp: document.querySelector("#group-help"),
   refreshGroups: document.querySelector("#refresh-groups"),
+  repeatHelp: document.querySelector("#repeat-help"),
   scheduledAt: document.querySelector("#scheduled-at"),
+  scheduledAtLabel: document.querySelector("#scheduled-at-label"),
+  scheduledAtHelp: document.querySelector("#scheduled-at-help"),
+  customSchedule: document.querySelector("#custom-schedule"),
+  customDayList: document.querySelector("#custom-day-list"),
   sendCount: document.querySelector("#send-count"),
   messageFields: document.querySelector("#message-fields"),
   maxRetries: document.querySelector("#max-retries"),
@@ -26,12 +31,25 @@ const elements = {
   toastRegion: document.querySelector("#toast-region")
 };
 
+const customDayNames = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+
 const state = {
   reminders: [],
   groups: [],
   editingId: null,
-  messageDrafts: [{ type: "text", text: "" }]
+  messageDrafts: [{ type: "text", text: "" }],
+  customSchedule: defaultCustomSchedule(),
+  standardScheduledAt: ""
 };
+
+function defaultCustomSchedule() {
+  return customDayNames.map((name, index) => ({
+    weekday: index + 1,
+    name,
+    enabled: index < 5,
+    times: index < 4 ? ["08:00", "17:00"] : (index === 4 ? ["08:00", "13:00"] : ["08:00"])
+  }));
+}
 
 function emptyMessageItem(type = "text") {
   return type === "poll"
@@ -53,8 +71,24 @@ const repeatLabels = {
   one_time: "One time",
   daily: "Daily",
   weekday: "Weekdays",
-  weekly: "Weekly"
+  weekly: "Weekly",
+  custom_weekly: "Custom days"
 };
+
+function customScheduleSummary(schedule = []) {
+  const groups = new Map();
+  for (const day of schedule) {
+    const key = day.times.join(", ");
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(day.weekday);
+  }
+  return [...groups.entries()].map(([times, weekdays]) => {
+    const names = weekdays.length > 1 && weekdays.every((day, index) => index === 0 || day === weekdays[index - 1] + 1)
+      ? `${customDayNames[weekdays[0] - 1]} to ${customDayNames[weekdays.at(-1) - 1]}`
+      : weekdays.map((day) => customDayNames[day - 1]).join(", ");
+    return `${names}: ${times}`;
+  }).join(" | ");
+}
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
@@ -230,6 +264,10 @@ function renderReminder(reminder) {
   meta.className = "reminder-meta";
   const repeat = document.createElement("span");
   repeat.textContent = repeatLabels[reminder.scheduleType] || reminder.scheduleType;
+  if (reminder.scheduleType === "custom_weekly") {
+    repeat.title = customScheduleSummary(reminder.customSchedule);
+    repeat.textContent = `Custom: ${customScheduleSummary(reminder.customSchedule)}`;
+  }
   const messageTotal = document.createElement("span");
   messageTotal.textContent = `${messageItems.length} message${messageItems.length === 1 ? "" : "s"}`;
   const attempts = document.createElement("span");
@@ -362,6 +400,7 @@ async function loadGroups() {
 
 function formPayload() {
   const selected = elements.groupSelect.selectedOptions[0];
+  const scheduleType = new FormData(elements.form).get("scheduleType");
   return {
     groupId: elements.groupSelect.value,
     groupName: selected?.dataset.groupName || selected?.textContent || "",
@@ -369,11 +408,122 @@ function formPayload() {
       ...item,
       options: item.type === "poll" ? [...item.options] : undefined
     })),
-    scheduleType: new FormData(elements.form).get("scheduleType"),
+    scheduleType,
+    customSchedule: scheduleType === "custom_weekly"
+      ? state.customSchedule.filter((day) => day.enabled).map((day) => ({ weekday: day.weekday, times: [...day.times] }))
+      : undefined,
     scheduledAt: elements.scheduledAt.value,
     timezone: WIB_TIMEZONE,
     maxRetries: Number(elements.maxRetries.value)
   };
+}
+
+function hydrateCustomSchedule(schedule = []) {
+  if (!schedule.length) return defaultCustomSchedule();
+  const stored = new Map(schedule.map((day) => [Number(day.weekday), day.times]));
+  return defaultCustomSchedule().map((day) => stored.has(day.weekday)
+    ? { ...day, enabled: true, times: [...stored.get(day.weekday)] }
+    : { ...day, enabled: false });
+}
+
+function renderCustomSchedule() {
+  const rows = state.customSchedule.map((day) => {
+    const row = document.createElement("section");
+    row.className = "custom-day-row";
+    row.dataset.enabled = String(day.enabled);
+
+    const header = document.createElement("label");
+    header.className = "custom-day-toggle";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = day.enabled;
+    checkbox.dataset.scheduleAction = "toggle-day";
+    checkbox.dataset.weekday = String(day.weekday);
+    header.append(checkbox, day.name);
+    row.append(header);
+
+    if (!day.enabled) {
+      const off = document.createElement("span");
+      off.className = "custom-day-off";
+      off.textContent = "Not scheduled";
+      row.append(off);
+      return row;
+    }
+
+    const timeList = document.createElement("div");
+    timeList.className = "custom-time-list";
+    day.times.forEach((time, timeIndex) => {
+      const timeRow = document.createElement("div");
+      timeRow.className = "custom-time-row";
+      const input = document.createElement("input");
+      input.type = "time";
+      input.step = "60";
+      input.required = true;
+      input.value = time;
+      input.setAttribute("aria-label", `${day.name} time ${timeIndex + 1}`);
+      input.dataset.scheduleAction = "time";
+      input.dataset.weekday = String(day.weekday);
+      input.dataset.timeIndex = String(timeIndex);
+      timeRow.append(input);
+      if (day.times.length > 1) {
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "quiet-button custom-time-remove";
+        remove.textContent = "Remove";
+        remove.setAttribute("aria-label", `Remove ${day.name} time ${timeIndex + 1}`);
+        remove.dataset.scheduleAction = "remove-time";
+        remove.dataset.weekday = String(day.weekday);
+        remove.dataset.timeIndex = String(timeIndex);
+        timeRow.append(remove);
+      }
+      timeList.append(timeRow);
+    });
+
+    if (day.times.length < 8) {
+      const add = document.createElement("button");
+      add.type = "button";
+      add.className = "text-button custom-time-add";
+      add.textContent = "Add time";
+      add.setAttribute("aria-label", `Add time for ${day.name}`);
+      add.dataset.scheduleAction = "add-time";
+      add.dataset.weekday = String(day.weekday);
+      timeList.append(add);
+    }
+    row.append(timeList);
+    return row;
+  });
+  elements.customDayList.replaceChildren(...rows);
+}
+
+function setScheduleMode() {
+  const scheduleType = new FormData(elements.form).get("scheduleType");
+  const custom = scheduleType === "custom_weekly";
+  elements.customSchedule.hidden = !custom;
+  elements.repeatHelp.textContent = custom
+    ? "Choose specific days and WIB times."
+    : (scheduleType === "weekday" ? "Weekdays run Monday through Friday." : "All recurring times use WIB.");
+
+  if (custom) {
+    if (elements.scheduledAt.type === "datetime-local") {
+      state.standardScheduledAt = elements.scheduledAt.value || state.standardScheduledAt;
+    }
+    const date = elements.scheduledAt.value.slice(0, 10) || wibInputValue().slice(0, 10);
+    elements.scheduledAt.type = "date";
+    elements.scheduledAt.step = "1";
+    elements.scheduledAt.value = date;
+    elements.scheduledAtLabel.textContent = "Start date";
+    elements.scheduledAtHelp.textContent = "The first selected time on or after this date will run in WIB.";
+    renderCustomSchedule();
+    return;
+  }
+
+  if (elements.scheduledAt.type === "date") {
+    elements.scheduledAt.type = "datetime-local";
+    elements.scheduledAt.value = state.standardScheduledAt || wibInputValue();
+  }
+  elements.scheduledAt.step = "60";
+  elements.scheduledAtLabel.textContent = "First send time";
+  elements.scheduledAtHelp.textContent = "The selected time is interpreted as WIB.";
 }
 
 function renderMessageFields() {
@@ -508,9 +658,13 @@ function resetForm() {
   state.editingId = null;
   elements.form.reset();
   state.messageDrafts = [emptyMessageItem()];
+  state.customSchedule = defaultCustomSchedule();
   elements.sendCount.value = "1";
   renderMessageFields();
-  elements.scheduledAt.value = wibInputValue();
+  state.standardScheduledAt = wibInputValue();
+  elements.scheduledAt.type = "datetime-local";
+  elements.scheduledAt.value = state.standardScheduledAt;
+  setScheduleMode();
   elements.maxRetries.value = "3";
   elements.formTitle.textContent = "New reminder";
   elements.submit.textContent = "Schedule reminder";
@@ -533,10 +687,19 @@ function editReminder(id) {
     : (reminder.messages?.length ? reminder.messages : [reminder.message]).map((text) => ({ type: "text", text }));
   elements.sendCount.value = String(state.messageDrafts.length);
   renderMessageFields();
-  elements.scheduledAt.value = reminder.scheduledLocal.slice(0, 16);
   elements.maxRetries.value = String(reminder.maxRetries);
   const radio = elements.form.querySelector(`[name="scheduleType"][value="${reminder.scheduleType}"]`);
   if (radio) radio.checked = true;
+  state.customSchedule = hydrateCustomSchedule(reminder.customSchedule);
+  if (reminder.scheduleType === "custom_weekly") {
+    elements.scheduledAt.type = "date";
+    elements.scheduledAt.value = reminder.scheduledLocal.slice(0, 10);
+  } else {
+    elements.scheduledAt.type = "datetime-local";
+    elements.scheduledAt.value = reminder.scheduledLocal.slice(0, 16);
+    state.standardScheduledAt = elements.scheduledAt.value;
+  }
+  setScheduleMode();
   elements.formTitle.textContent = "Edit reminder";
   elements.submit.textContent = "Save changes";
   elements.cancelEdit.hidden = false;
@@ -558,6 +721,12 @@ async function submitForm(event) {
   event.preventDefault();
   showFormError("");
 
+  const scheduleType = new FormData(elements.form).get("scheduleType");
+  if (scheduleType === "custom_weekly" && !state.customSchedule.some((day) => day.enabled)) {
+    showFormError("Select at least one custom day and time.");
+    elements.customDayList.querySelector("input[type='checkbox']")?.focus();
+    return;
+  }
   if (!elements.form.reportValidity()) return;
   elements.submit.disabled = true;
   elements.submit.textContent = state.editingId ? "Saving changes" : "Scheduling reminder";
@@ -679,6 +848,38 @@ function initializeTheme() {
 }
 
 elements.form.addEventListener("submit", submitForm);
+elements.form.querySelectorAll("[name='scheduleType']").forEach((radio) => {
+  radio.addEventListener("change", setScheduleMode);
+});
+elements.scheduledAt.addEventListener("change", () => {
+  if (elements.scheduledAt.type === "datetime-local") state.standardScheduledAt = elements.scheduledAt.value;
+});
+elements.customDayList.addEventListener("change", (event) => {
+  if (event.target.dataset.scheduleAction !== "toggle-day") return;
+  const day = state.customSchedule.find((item) => item.weekday === Number(event.target.dataset.weekday));
+  if (!day) return;
+  day.enabled = event.target.checked;
+  renderCustomSchedule();
+});
+elements.customDayList.addEventListener("input", (event) => {
+  if (event.target.dataset.scheduleAction !== "time") return;
+  const day = state.customSchedule.find((item) => item.weekday === Number(event.target.dataset.weekday));
+  if (day) day.times[Number(event.target.dataset.timeIndex)] = event.target.value;
+});
+elements.customDayList.addEventListener("click", (event) => {
+  const control = event.target.closest("button[data-schedule-action]");
+  if (!control) return;
+  const day = state.customSchedule.find((item) => item.weekday === Number(control.dataset.weekday));
+  if (!day) return;
+  if (control.dataset.scheduleAction === "remove-time" && day.times.length > 1) {
+    day.times.splice(Number(control.dataset.timeIndex), 1);
+  }
+  if (control.dataset.scheduleAction === "add-time" && day.times.length < 8) {
+    const candidates = ["08:00", "13:00", "17:00", "09:00", "12:00", "15:00", "18:00", "20:00"];
+    day.times.push(candidates.find((time) => !day.times.includes(time)) || "00:00");
+  }
+  renderCustomSchedule();
+});
 elements.sendCount.addEventListener("change", renderMessageFields);
 elements.messageFields.addEventListener("input", (event) => {
   if (!(event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement)) return;
